@@ -11,7 +11,7 @@
 
 ## 🧠 What is AI Atlas?
 
-**AI Atlas** (formerly Study Buddy AI) is a conversational AI assistant that can help you with:
+**AI Atlas** is a conversational AI assistant that can help you with:
 
 - 📚 Study plans, exam prep, and learning guidance
 - 💼 Career advice, resume writing, and project planning
