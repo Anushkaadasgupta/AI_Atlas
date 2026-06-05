@@ -62,8 +62,8 @@ AI_Atlas/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/AI-Atlas.git
-cd AI-Atlas
+git clone https://github.com/YOUR_USERNAME/AI_Atlas.git
+cd AI_Atlas
 ```
 
 ### 2. Create and activate a virtual environment
