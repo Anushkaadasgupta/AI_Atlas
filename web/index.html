@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Atlas</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-inner">
+          <div>
+            <h2>Settings</h2>
+            <p class="subtitle">Configure your AI assistant</p>
+          </div>
+
+          <div class="field">
+            <label>Provider</label>
+            <select id="provider">
+              <option value="auto">auto</option>
+              <option value="openai">openai</option>
+              <option value="anthropic">anthropic</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Model</label>
+            <input id="model" type="text" value="chat-latest" />
+          </div>
+
+          <div class="field">
+            <label>Answer Style</label>
+            <select id="style">
+              <option value="balanced">balanced</option>
+              <option value="concise">concise</option>
+              <option value="detailed">detailed</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <div class="slider-row">
+              <label>Knowledge Snippets</label>
+              <span id="topkValue">4</span>
+            </div>
+            <input id="topk" type="range" min="1" max="10" value="4" />
+          </div>
+
+          <button id="clearChat" class="clear-btn">Clear chat</button>
+        </div>
+      </aside>
+
+      <main class="main-area">
+        <div class="noise"></div>
+        <header class="hero">
+          <div>
+            <h1>AI Atlas</h1>
+            <p>A premium dark research companion for projects, careers, health, and image prompts.</p>
+          </div>
+        </header>
+
+        <section class="chat-panel">
+          <div id="messages" class="messages"></div>
+
+          <div class="composer-wrap">
+            <form id="chatForm" class="composer">
+              <input
+                id="chatInput"
+                type="text"
+                placeholder="Ask anything — from projects to health to image prompts..."
+                autocomplete="off"
+              />
+              <button type="submit" aria-label="Send message">
+                <span>➜</span>
+              </button>
+            </form>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

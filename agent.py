@@ -1,113 +1,240 @@
-from typing import TypedDict, List
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
-from sentence_transformers import SentenceTransformer
-import chromadb
-from dataset import docs
-from datetime import datetime
+from __future__ import annotations
 
-# Embeddings
-embedder = SentenceTransformer('all-MiniLM-L6-v2')
-texts = [d["text"] for d in docs]
-embeddings = embedder.encode(texts).tolist()
+from dotenv import load_dotenv
+import os
+import re
+import warnings
+from typing import Any, Dict, List, Sequence
 
-client = chromadb.Client()
-collection = client.create_collection(name="studybuddy")
-
-collection.add(
-    documents=texts,
-    embeddings=embeddings,
-    ids=[d["id"] for d in docs],
-    metadatas=[{"topic": d["topic"]} for d in docs]
+warnings.filterwarnings(
+    "ignore",
+    message=r".*duckduckgo_search.*renamed to `ddgs`.*",
+    category=RuntimeWarning,
 )
 
-# State
-class State(TypedDict):
-    question: str
-    messages: List
-    route: str
-    retrieved: str
-    sources: List
-    tool_result: str
-    answer: str
-    faithfulness: float
-    eval_retries: int
+from ddgs import DDGS
+from groq import Groq
 
-# Nodes
-def memory_node(state):
-    msgs = state.get("messages", [])
-    msgs.append(("user", state["question"]))
-    return {"messages": msgs[-6:]}
+load_dotenv()
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-def router_node(state):
-    q = state["question"].lower()
-    if "time" in q or "date" in q:
-        return {"route": "tool"}
-    return {"route": "retrieve"}
+SYSTEM_PROMPT = (
+    "You are STUDY BUDDY, a smart helpful assistant. Answer any question on any topic — "
+    "technology, science, health, career, mental health, general knowledge, and everything else. "
+    "Understand short forms and abbreviations in context. "
+    "Give clear, helpful answers."
+)
 
-def retrieval_node(state):
-    q_embed = embedder.encode([state["question"]]).tolist()
-    res = collection.query(query_embeddings=q_embed, n_results=3)
+GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_MODEL = GROQ_MODEL
+MAX_HISTORY_MESSAGES = 12
 
-    context = ""
-    for i, doc in enumerate(res["documents"][0]):
-        topic = res["metadatas"][0][i]["topic"]
-        context += f"[{topic}] {doc}\n"
+abbreviations = {
+    "ml": "machine learning",
+    "ai": "artificial intelligence",
+    "dl": "deep learning",
+    "nlp": "natural language processing",
+    "ds": "data science",
+    "cv": "computer vision",
+    "nn": "neural network",
+    "db": "database",
+    "os": "operating system",
+    "oop": "object oriented programming",
+    "api": "application programming interface",
+    "ui": "user interface",
+    "ux": "user experience",
+    "js": "javascript",
+    "py": "python",
+    "sql": "structured query language",
+}
 
-    return {"retrieved": context, "sources": res["metadatas"][0]}
+ABBREVIATION_PATTERN = re.compile(
+    r"\b(" + "|".join(sorted(map(re.escape, abbreviations.keys()), key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
 
-def tool_node(state):
-    return {"tool_result": str(datetime.now())}
 
-def answer_node(state):
-    context = state.get("retrieved", "")
-    tool = state.get("tool_result", "")
-    answer = f"{context}\nTool:{tool}\nAnswer: {state['question']} explained simply."
-    return {"answer": answer}
+def expand_abbreviations(text: str) -> str:
+    if not text:
+        return text
 
-def eval_node(state):
-    return {"faithfulness": 0.9, "eval_retries": state.get("eval_retries", 0) + 1}
+    def replace(match: re.Match[str]) -> str:
+        return abbreviations[match.group(0).lower()]
 
-def save_node(state):
-    msgs = state["messages"]
-    msgs.append(("assistant", state["answer"]))
-    return {"messages": msgs}
+    return ABBREVIATION_PATTERN.sub(replace, text)
 
-# Graph
-graph = StateGraph(State)
 
-graph.add_node("memory", memory_node)
-graph.add_node("router", router_node)
-graph.add_node("retrieve", retrieval_node)
-graph.add_node("tool", tool_node)
-graph.add_node("answer", answer_node)
-graph.add_node("eval", eval_node)
-graph.add_node("save", save_node)
+def _normalize_history(messages: Sequence[Any] | None) -> List[Dict[str, str]]:
+    normalized: List[Dict[str, str]] = []
+    for message in (messages or [])[-MAX_HISTORY_MESSAGES:]:
+        if isinstance(message, dict):
+            role = str(message.get("role", "")).strip()
+            content = str(message.get("content", "")).strip()
+        elif isinstance(message, (tuple, list)) and len(message) >= 2:
+            role = str(message[0]).strip()
+            content = str(message[1]).strip()
+        else:
+            continue
 
-graph.set_entry_point("memory")
+        if role not in {"user", "assistant", "system"} or not content:
+            continue
 
-graph.add_edge("memory", "router")
-graph.add_edge("retrieve", "answer")
-graph.add_edge("tool", "answer")
-graph.add_edge("answer", "eval")
-graph.add_edge("save", END)
+        if role == "user":
+            content = expand_abbreviations(content)
 
-def route_decision(state):
-    return state["route"]
+        normalized.append({"role": role, "content": content})
 
-graph.add_conditional_edges("router", route_decision, {
-    "retrieve": "retrieve",
-    "tool": "tool"
-})
+    return normalized
 
-def eval_decision(state):
-    if state["faithfulness"] < 0.7 and state["eval_retries"] < 2:
-        return "answer"
-    return "save"
 
-graph.add_conditional_edges("eval", eval_decision, {
-    "answer": "answer",
-    "save": "save"
-})
+def _build_messages(question: str, history: Sequence[Any] | None) -> List[Dict[str, str]]:
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(_normalize_history(history))
+    messages.append({"role": "user", "content": expand_abbreviations(question)})
+    return messages
 
-app = graph.compile(checkpointer=MemorySaver())
+
+def _extract_groq_text(response: Any) -> str:
+    if not getattr(response, "choices", None):
+        return ""
+
+    message = response.choices[0].message
+    content = getattr(message, "content", "")
+
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, list):
+        text_parts: List[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text_parts.append(str(item.get("text", "")))
+            else:
+                text_parts.append(str(getattr(item, "text", item)))
+        return "".join(text_parts).strip()
+
+    return str(content).strip()
+
+
+def _search_duckduckgo(question: str) -> str:
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(question, max_results=3))
+
+        if not results:
+            return ""
+
+        body_texts: List[str] = []
+        for result in results[:2]:
+            title = str(result.get("title", "")).strip()
+            body = str(result.get("body", "")).strip()
+            combined = " ".join(part for part in [title, body] if part).strip()
+            if combined:
+                body_texts.append(combined)
+
+        if not body_texts:
+            return ""
+
+        cleaned_question = question.strip().rstrip("?")
+        answer_parts = [
+            f"For {cleaned_question.lower()}, here’s a direct answer based on recent web information:",
+            "",
+            body_texts[0],
+        ]
+        if len(body_texts) > 1:
+            answer_parts.extend(["", body_texts[1]])
+
+        answer_parts.extend(
+            [
+                "",
+                "In short: use the points above as the most relevant current guidance.",
+            ]
+        )
+        return "\n".join(answer_parts).strip()
+    except Exception as e:
+        print(f"DDG ERROR: {e}")
+        return "Sorry, I could not find an answer right now."
+
+
+def get_response(
+    question: str,
+    history: Sequence[Any] | None = None,
+    model: str = GROQ_MODEL,
+    provider: str | None = None,
+    style: str | None = None,
+    top_k: int | None = None,
+) -> str:
+    del provider, style, top_k
+
+    cleaned_question = (question or "").strip()
+    if not cleaned_question:
+        return "Sorry, could not find an answer. Try again."
+
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key or api_key.lower() == "your_key_here":
+        return "API key not found. Check your .env file."
+
+    messages = _build_messages(cleaned_question, history)
+    resolved_model = model.strip() if model and model.strip() else GROQ_MODEL
+
+    try:
+        response = client.chat.completions.create(
+            model=resolved_model,
+            messages=messages,
+        )
+        answer = _extract_groq_text(response)
+        if answer:
+            return answer
+        raise RuntimeError("Groq returned an empty response.")
+    except Exception:
+        try:
+            search_summary = _search_duckduckgo(cleaned_question)
+            if search_summary:
+                return search_summary
+        except Exception:
+            pass
+        return "Sorry, could not find an answer. Try again."
+
+
+def generate_answer(
+    question: str,
+    history: Sequence[Any] | None = None,
+    provider: str = "groq",
+    model: str = GROQ_MODEL,
+    style: str = "balanced",
+    top_k: int = 4,
+) -> Dict[str, Any]:
+    answer = get_response(
+        question=question,
+        history=history,
+        model=model,
+        provider=provider,
+        style=style,
+        top_k=top_k,
+    )
+    return {
+        "answer": answer,
+        "route": "groq" if answer != "API key not found. Check your .env file." else "error",
+        "sources": [],
+        "context": "",
+        "model": model,
+        "provider": "groq",
+    }
+
+
+class StudyBuddyApp:
+    def invoke(self, payload: Dict[str, Any], config: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        del config
+
+        settings = payload.get("settings", {})
+        return generate_answer(
+            question=str(payload.get("question", "")),
+            history=payload.get("messages", []),
+            provider=str(settings.get("provider", "groq")),
+            model=str(settings.get("model", GROQ_MODEL)),
+            style=str(settings.get("style", "balanced")),
+            top_k=int(settings.get("top_k", 4)),
+        )
+
+
+app = StudyBuddyApp()
