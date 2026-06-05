@@ -1,4 +1,4 @@
-# Study Buddy AI
+# AI Atlas
 
 ##  Project Overview
 Study Buddy AI is an Agentic AI-based assistant designed to help students understand Artificial Intelligence concepts. It uses Retrieval-Augmented Generation (RAG), memory, and tools to provide accurate and context-based answers.
